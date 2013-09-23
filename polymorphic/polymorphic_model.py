@@ -17,6 +17,7 @@ from __future__ import absolute_import
 
 from django.db import models
 from django.contrib.contenttypes.models import ContentType
+from django import VERSION as django_VERSION
 from django.utils import six
 
 from .base import PolymorphicModelBase
@@ -56,8 +57,13 @@ class PolymorphicModel(six.with_metaclass(PolymorphicModelBase, models.Model)):
         abstract = True
 
     # avoid ContentType related field accessor clash (an error emitted by model validation)
+    # we really should use both app_label and model name, but this is only possible since Django 1.2
+    if django_VERSION[0] <= 1 and django_VERSION[1] <= 1:
+        p_related_name_template = 'polymorphic_%(class)s_set'
+    else:
+        p_related_name_template = 'polymorphic_%(app_label)s.%(class)s_set'
     polymorphic_ctype = models.ForeignKey(ContentType, null=True, editable=False,
-                                related_name='polymorphic_%(app_label)s.%(class)s_set')
+                                related_name=p_related_name_template)
 
     # some applications want to know the name of the fields that are added to its models
     polymorphic_internal_model_fields = ['polymorphic_ctype']
@@ -88,7 +94,7 @@ class PolymorphicModel(six.with_metaclass(PolymorphicModelBase, models.Model)):
         self.pre_save_polymorphic()
         return super(PolymorphicModel, self).save(*args, **kwargs)
 
-    def get_real_instance_class(self):
+    def get_real_instance_class(self, using='default'):
         """
         Normally not needed.
         If a non-polymorphic manager (like base_objects) has been used to
@@ -101,33 +107,33 @@ class PolymorphicModel(six.with_metaclass(PolymorphicModelBase, models.Model)):
         # Note that model_class() can return None for stale content types;
         # when the content type record still exists but no longer refers to an existing model.
         try:
-            return ContentType.objects.get_for_id(self.polymorphic_ctype_id).model_class()
+            return ContentType.objects.db_manager(using).get_for_id(self.polymorphic_ctype_id).model_class()
         except AttributeError:
             # Django <1.6 workaround
             return None
 
-    def get_real_concrete_instance_class_id(self):
-        model_class = self.get_real_instance_class()
+    def get_real_concrete_instance_class_id(self, using='default'):
+        model_class = self.get_real_instance_class(using=using)
         if model_class is None:
             return None
-        return ContentType.objects.get_for_model(model_class, for_concrete_model=True).pk
+        return ContentType.objects.db_manager(using).get_for_model(model_class, for_concrete_model=True).pk
 
-    def get_real_concrete_instance_class(self):
-        model_class = self.get_real_instance_class()
+    def get_real_concrete_instance_class(self, using='default'):
+        model_class = self.get_real_instance_class(using)
         if model_class is None:
             return None
-        return ContentType.objects.get_for_model(model_class, for_concrete_model=True).model_class()
+        return ContentType.objects.db_manager(using).get_for_model(model_class, for_concrete_model=True).model_class()
 
-    def get_real_instance(self):
+    def get_real_instance(self, using='default'):
         """Normally not needed.
         If a non-polymorphic manager (like base_objects) has been used to
         retrieve objects, then the complete object with it's real class/type
         and all fields may be retrieved with this method.
         Each method call executes one db query (if necessary)."""
-        real_model = self.get_real_instance_class()
+        real_model = self.get_real_instance_class(using=using)
         if real_model == self.__class__:
             return self
-        return real_model.objects.get(pk=self.pk)
+        return real_model.objects.using(using).get(pk=self.pk)
 
     def __init__(self, * args, ** kwargs):
         """Replace Django's inheritance accessor member functions for our model

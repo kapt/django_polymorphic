@@ -15,11 +15,7 @@ from .query_translate import translate_polymorphic_field_path
 
 # chunk-size: maximum number of objects requested per db-request
 # by the polymorphic queryset.iterator() implementation; we use the same chunk size as Django
-try:
-    from django.db.models.query import CHUNK_SIZE               # this is 100 for Django 1.1/1.2
-except ImportError:
-    # CHUNK_SIZE was removed in Django 1.6
-    CHUNK_SIZE = 100
+from django.db.models.query import CHUNK_SIZE               # this is 100 for Django 1.1/1.2
 Polymorphic_QuerySet_objects_per_request = CHUNK_SIZE
 
 
@@ -67,9 +63,8 @@ class PolymorphicQuerySet(QuerySet):
         """switch off polymorphic behaviour for this query.
         When the queryset is evaluated, only objects of the type of the
         base class used for this query are returned."""
-        qs = self._clone()
-        qs.polymorphic_disabled = True
-        return qs
+        self.polymorphic_disabled = True
+        return self
 
     def instance_of(self, *args):
         """Filter the queryset to only include the classes in args (and their subclasses).
@@ -110,8 +105,8 @@ class PolymorphicQuerySet(QuerySet):
         """translate the polymorphic field paths in the kwargs, then call vanilla aggregate.
         We need no polymorphic object retrieval for aggregate => switch it off."""
         self._process_aggregate_args(args, kwargs)
-        qs = self.non_polymorphic()
-        return super(PolymorphicQuerySet, qs).aggregate(*args, **kwargs)
+        self.polymorphic_disabled = True
+        return super(PolymorphicQuerySet, self).aggregate(*args, **kwargs)
 
     # Since django_polymorphic 'V1.0 beta2', extra() always returns polymorphic results.^
     # The resulting objects are required to have a unique primary key within the result set
@@ -149,7 +144,7 @@ class PolymorphicQuerySet(QuerySet):
         """
         ordered_id_list = []    # list of ids of result-objects in correct order
         results = {}            # polymorphic dict of result-objects, keyed with their id (no order)
-
+		
         # dict contains one entry per unique model type occurring in result,
         # in the format idlist_per_model[modelclass]=[list-of-object-ids]
         idlist_per_model = defaultdict(list)
@@ -158,12 +153,12 @@ class PolymorphicQuerySet(QuerySet):
         # - also record the correct result order in "ordered_id_list"
         # - store objects that already have the correct class into "results"
         base_result_objects_by_id = {}
-        self_model_class_id = ContentType.objects.get_for_model(self.model, for_concrete_model=False).pk
-        self_concrete_model_class_id = ContentType.objects.get_for_model(self.model, for_concrete_model=True).pk
-
+        self_model_class_id = ContentType.objects.db_manager(self.db).get_for_model(self.model, for_concrete_model=False).pk
+        self_concrete_model_class_id = ContentType.objects.db_manager(self.db).get_for_model(self.model, for_concrete_model=True).pk
+        
         for base_object in base_result_objects:
             ordered_id_list.append(base_object.pk)
-
+			
             # check if id of the result object occeres more than once - this can happen e.g. with base_objects.extra(tables=...)
             if not base_object.pk in base_result_objects_by_id:
                 base_result_objects_by_id[base_object.pk] = base_object
@@ -173,8 +168,8 @@ class PolymorphicQuerySet(QuerySet):
                     results[base_object.pk] = base_object
 
                 else:
-                    real_concrete_class = base_object.get_real_instance_class()
-                    real_concrete_class_id = base_object.get_real_concrete_instance_class_id()
+                    real_concrete_class = base_object.get_real_instance_class(using=self.db)
+                    real_concrete_class_id = base_object.get_real_concrete_instance_class_id(using=self.db)
 
                     if real_concrete_class_id is None:
                         # Dealing with a stale content type
@@ -184,7 +179,7 @@ class PolymorphicQuerySet(QuerySet):
                         # upcast it and put it in the results
                         results[base_object.pk] = transmogrify(real_concrete_class, base_object)
                     else:
-                        real_concrete_class = ContentType.objects.get_for_id(real_concrete_class_id).model_class()
+                        real_concrete_class = ContentType.objects.db_manager(self.db).get_for_id(real_concrete_class_id).model_class()
                         idlist_per_model[real_concrete_class].append(base_object.pk)
 
         # django's automatic ".pk" field does not always work correctly for
@@ -202,12 +197,12 @@ class PolymorphicQuerySet(QuerySet):
         # Then we copy the extra() select fields from the base objects to the real objects.
         # TODO: defer(), only(): support for these would be around here
         for real_concrete_class, idlist in idlist_per_model.items():
-            real_objects = real_concrete_class.base_objects.filter(pk__in=idlist)  # use pk__in instead ####
+            real_objects = real_concrete_class.base_objects.using(self.db).filter(pk__in=idlist)  # use pk__in instead ####
             real_objects.query.select_related = self.query.select_related  # copy select related configuration to new qs
-
+            
             for real_object in real_objects:
                 o_pk = getattr(real_object, pk_name)
-                real_class = real_object.get_real_instance_class()
+                real_class = real_object.get_real_instance_class(using=self.db)
 
                 # If the real class is a proxy, upcast it
                 if real_class != real_concrete_class:
