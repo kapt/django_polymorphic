@@ -20,7 +20,7 @@ from functools import reduce
 # functionality to filters and Q objects.
 # Probably a more general queryset enhancement class could be made out of them.
 
-def translate_polymorphic_filter_definitions_in_kwargs(queryset_model, kwargs):
+def translate_polymorphic_filter_definitions_in_kwargs(queryset_model, kwargs, using='default'):
     """
     Translate the keyword argument list for PolymorphicQuerySet.filter()
 
@@ -37,7 +37,7 @@ def translate_polymorphic_filter_definitions_in_kwargs(queryset_model, kwargs):
     additional_args = []
     for field_path, val in kwargs.copy().items():  # Python 3 needs copy
 
-        new_expr = _translate_polymorphic_filter_definition(queryset_model, field_path, val)
+        new_expr = _translate_polymorphic_filter_definition(queryset_model, field_path, val, using=using)
 
         if type(new_expr) == tuple:
             # replace kwargs element
@@ -90,7 +90,7 @@ def translate_polymorphic_filter_definitions_in_args(queryset_model, args):
         translate_polymorphic_Q_object(queryset_model, q)
 
 
-def _translate_polymorphic_filter_definition(queryset_model, field_path, field_val):
+def _translate_polymorphic_filter_definition(queryset_model, field_path, field_val, using='default'):
     """
     Translate a keyword argument (field_path=field_val), as used for
     PolymorphicQuerySet.filter()-like functions (and Q objects).
@@ -105,9 +105,9 @@ def _translate_polymorphic_filter_definition(queryset_model, field_path, field_v
     # handle instance_of expressions or alternatively,
     # if this is a normal Django filter expression, return None
     if field_path == 'instance_of':
-        return _create_model_filter_Q(field_val)
+        return _create_model_filter_Q(field_val, using=using)
     elif field_path == 'not_instance_of':
-        return _create_model_filter_Q(field_val, not_instance_of=True)
+        return _create_model_filter_Q(field_val, not_instance_of=True, using=using)
     elif not '___' in field_path:
         return None  # no change
 
@@ -210,7 +210,7 @@ def translate_polymorphic_field_path(queryset_model, field_path):
     return newpath
 
 
-def _create_model_filter_Q(modellist, not_instance_of=False):
+def _create_model_filter_Q(modellist, not_instance_of=False, using='default'):
     """
     Helper function for instance_of / not_instance_of
     Creates and returns a Q object that filters for the models in modellist,
@@ -235,7 +235,7 @@ def _create_model_filter_Q(modellist, not_instance_of=False):
             assert False, 'PolymorphicModel: instance_of expects a list of (polymorphic) models or a single (polymorphic) model'
 
     def q_class_with_subclasses(model):
-        q = Q(polymorphic_ctype=ContentType.objects.get_for_model(model, for_concrete_model=False))
+        q = Q(polymorphic_ctype=ContentType.objects.db_manager(using).get_for_model(model, for_concrete_model=False))
         for subclass in model.__subclasses__():
             q = q | q_class_with_subclasses(subclass)
         return q

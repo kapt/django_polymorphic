@@ -79,7 +79,7 @@ class PolymorphicQuerySet(QuerySet):
     def _filter_or_exclude(self, negate, *args, **kwargs):
         "We override this internal Django functon as it is used for all filter member functions."
         translate_polymorphic_filter_definitions_in_args(self.model, args)  # the Q objects
-        additional_args = translate_polymorphic_filter_definitions_in_kwargs(self.model, kwargs)  # filter_field='data'
+        additional_args = translate_polymorphic_filter_definitions_in_kwargs(self.model, kwargs, using=self.db)  # filter_field='data'
         return super(PolymorphicQuerySet, self)._filter_or_exclude(negate, *(list(args) + additional_args), **kwargs)
 
     def order_by(self, *args, **kwargs):
